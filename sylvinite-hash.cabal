@@ -1,0 +1,30 @@
+cabal-version:      3.0
+name:               sylvinite-hash
+version:            0.0.1
+synopsis:           Cryptographic hashes.
+-- description:
+homepage:           9k.vc
+license:            BSD-3-Clause
+license-file:       LICENSE
+author:             Seth Livy
+maintainer:         no-reply@goarmy.com
+-- copyright:
+category:           Cryptography
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md
+-- extra-source-files:
+
+common warnings
+    ghc-options: -Wall
+
+library
+    import:           warnings
+    exposed-modules:  Sylvinite.Hash
+    -- other-modules:
+    -- other-extensions:
+    build-depends:    
+      base >=4.2 && < 5,
+      bitvec,
+      vector
+    hs-source-dirs:   src
+    default-language: Haskell2010
