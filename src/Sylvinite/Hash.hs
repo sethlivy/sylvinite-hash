@@ -1,6 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
 
 module Sylvinite.Hash 
   ( sha1
@@ -21,7 +22,10 @@ where
 import Data.Bits 
 import Data.Word
 import qualified Data.Vector.Unboxed as Vx
+import qualified Data.Vector as Vc
 import Data.Bit as Bit
+import Data.Functor.Identity
+
 {-
 sha1 = undefined
 sha224 = undefined
@@ -51,6 +55,8 @@ rotl n x = x `rotateL` n
 -- rotl n x = (x `shiftL` n) .|. (x `shiftR` ((bitSize x) - n))
 
 -- SHA1 Functions
+
+-- WHAT IS THE PURPOSE OF THIS. THE FEDERAL GOVERNMENT DOES NOT SAY.
 sha1Function :: Word32 -> Word32 -> Word32 -> Int -> Word32
 sha1Function a b c t 
   | (0 <= t) && (t <= 19) = ch a b c -- Let's make this contravariant one day!
@@ -146,7 +152,7 @@ padMessage512 message =
       messageLength = countBits message
       messageLength' = countBits messageAppend1
       paddingK = Vx.replicate ((448 - messageLength') `mod` 512) (Bit False)
-      messageLengthBitVector = castFromWords [fromIntegral messageLength] 
+      messageLengthBitVector = castFromWords $ Vx.singleton (fromIntegral messageLength)
       paddingL = 
         (Vx.replicate (64 - countBits messageLengthBitVector) (Bit False))
         Vx.++
@@ -158,6 +164,7 @@ padMessage512 message =
 
 -- author's note. 2^64 bits is about 2 and a quarter exabytes. Who has a single thing
 -- of that size? Facebook?
+-- author's note. soon i shall deduplicate this
 
 -- Pad message for SHA-384, SHA-512, SHA-512/224, SHA-512/256
 
@@ -167,7 +174,7 @@ padMessage1024 message =
       messageLength = countBits message
       messageLength' = countBits messageAppend1
       paddingK = Vx.replicate ((896 - messageLength') `mod` 1024) (Bit False)
-      messageLengthBitVector = castFromWords [fromIntegral messageLength] 
+      messageLengthBitVector = castFromWords $ Vx.singleton (fromIntegral messageLength)
       paddingL = 
         (Vx.replicate (128 - countBits messageLengthBitVector) (Bit False))
         Vx.++
@@ -187,12 +194,19 @@ padMessage1024 message =
 
 -- Good luck finding out the type constraints for THIS ONE.
 
+-- God I suck.
 sliceAndConvert x as =
   let (ys, zs) = Vx.splitAt x as
    in (pure $ ((Vx.map fromIntegral) . cloneToWords) ys) ++ (sliceAndConvert x zs)
 
-parse512 :: Vector Bit -> Vector Word32
-parse512 message = Vx.concat $ sliceAndConvert 32 message
+splitAts :: (Vx.Unbox a) => Int -> Vector a -> [Vector a]
+splitAts x as =
+  let (ys, zs) = Vx.splitAt x as
+   in (pure ys) ++ (splitAts x zs)
+
+-- Makes a list of 512-bit message blocks. Sixteen 32-bit words are in each vector.
+parse512 :: Vector Bit -> [Vector Word32]
+parse512 message = (splitAts 16) . Vx.concat $ (sliceAndConvert 32 message)
 
 -- Parsing message for SHA-384, SHA-512, SHA-512/224, SHA-512/256
 
@@ -201,17 +215,17 @@ parse1024 message = Vx.concat $ sliceAndConvert 64 message
 
 -- Initial hash values
 
-h0_sha1 :: Vector Word32
-h0_sha1 =
-  [ 0x67452301
+h0_sha1 = 
+  ( 0
+  , 0x67452301
   , 0xefcdab89
   , 0x98badcfe
   , 0x10325476
   , 0xc3d2e1f0
-  ]
+  )
 
 h0_sha224 :: Vector Word32
-h0_sha224 =
+h0_sha224 = Vx.fromList
   [ 0xc1059ed8
   , 0x367cd507
   , 0x3070dd17
@@ -223,7 +237,7 @@ h0_sha224 =
   ]
 
 h0_sha384 :: Vector Word64
-h0_sha384 =
+h0_sha384 = Vx.fromList
   [ 0xcbbb9d5dc1059ed8
   , 0x629a292a367cd507
   , 0x9159015a3070dd17
@@ -235,7 +249,7 @@ h0_sha384 =
   ]
 
 h0_sha512 :: Vector Word64
-h0_sha512 =
+h0_sha512 = Vx.fromList
   [ 0x6a09e667f3bbc908
   , 0xbb67ae8584caa73b
   , 0x3c6ef372fe94f82b
@@ -250,7 +264,7 @@ h0_sha512t :: Vector Word64
 h0_sha512t = Vx.map (xor 0xa5a5a5a5a5a5a5a5) h0_sha512
 
 h0_sha512224 :: Vector Word64
-h0_sha512224 =
+h0_sha512224 = Vx.fromList
   [ 0x8c3d37c819544da2
   , 0x73e1996689dcd4d6
   , 0x1dfab7ae32ff9cb2
@@ -262,7 +276,7 @@ h0_sha512224 =
   ]
 
 h0_sha512256 :: Vector Word64
-h0_sha512256 =
+h0_sha512256 = Vx.fromList
   [ 0x22312194fc2bf72c
   , 0x9f555fa3c84c64c2
   , 0x2393b86b6f53b151
@@ -276,22 +290,52 @@ h0_sha512256 =
 -- SHA-1 hashing algorithm. Message must be of length l bits, where 
 -- 0 <= l <= 2^64.
 
-sha1 :: Vector Bit -> Vector Bit
+
+
+data SHA1HashValues = SHA1HashValues
+  { a :: Word32
+  , b :: Word32
+  , c :: Word32
+  , d :: Word32
+  , e :: Word32 
+  }
+
+wt :: (Bits a, Vx.Unbox a) => Vector a -> Int -> a
+wt msg t -- message schedule gen function. spits out words, not bit vectors
+  | (0 <= t) && (t <= 15) = msg Vx.! t
+  | (16 <= t) && (t <= 79) = -- this could be cleaner
+      rotl 1 $ foldl1 xor [wt msg (t-3), wt msg (t-8), wt msg (t-14), wt msg (t-16)] 
+
+sha1 :: Vector Bit -> Vector Bit 
 sha1 message =
   let initHash = h0_sha1
-      preprocessedMessage = parse512 . padMessage512 $ message
-      messageSchedule acc result = 
-      -- Do I know how to do anything else besides manual recursion?
-       let go acc w 
-            | acc <= 79 =
-                go (acc + 1) 
-                  (w `Vx.snoc` rotl 1 
-                    (w Vx.! (acc-3) `xor` 
-                     w Vx.! (acc-8) `xor` 
-                     w Vx.! (acc-14) `xor` 
-                     w Vx.! (acc-16)))
-            | otherwise = w
-       in go 16 preprocessedMessage
-   in undefined
+      parsedMessage = parse512 . padMessage512 $ message
+      messageLength = length parsedMessage
+      prepare (_,a,b,c,d,e) = 
+        castFromWords . (Vx.map fromIntegral) . Vx.fromList $ [a,b,c,d,e]
+   in prepare . Vx.last $ 
+        Vx.unfoldrExactN messageLength (\a -> coalg parsedMessage a) h0_sha1
 
+
+messageSchedule :: Int -> [Vector Word32] -> Vector Word32
+messageSchedule index parsed = Vx.fromList $ (wt $ parsed !! index) <$> [0..79] 
+
+step3 :: w ~ Word32 => Vector w -> (w,w,w,w,w,w,Int) -> (w,w,w,w,w,w,Int) 
+step3 msg startval = Vc.last $ Vc.unfoldrExactN 80 (\old@(t,e,d,c,b,a,idx) -> 
+  (,) old -- this is so ugly.
+    ((rotl 5 a) + (sha1Function b c d idx) + e + (sha1Constants idx) + (wt msg idx),
+    d,
+    c,
+    rotl 30 b,
+    a,
+    t,
+    idx+1))
+  startval 
+
+coalg :: (w ~ Word32, xx ~ (Int,w,w,w,w,w)) => [Vector w] -> xx -> (xx,xx) -- fuck you
+coalg msg old@(idx,a,b,c,d,e) = (,) old $ runIdentity $ do
+  let w = messageSchedule idx msg
+      prepare (_,e,d,c,b,a,_) = (a,b,c,d,e)
+      (a',b',c',d',e') = prepare $ step3 w (0,e,d,c,b,a,idx)
+  return (idx+1,a+a',b+b',c+c',d+d',e+e')
 
