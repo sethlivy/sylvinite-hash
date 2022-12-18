@@ -356,12 +356,12 @@ padMessage512 message =
         paddingL =
             (Vx.replicate (64 - countBits messageLengthBitVector) (Bit False))
                 Vx.++ messageLengthBitVector
-     in if messageLength >= (2 ^ (64 :: Int)) -- hate you, ^
+     in {- if messageLength >= (2 ^ (64 :: Int)) -- hate you, ^
             then
                 error
                     "Message is too large. What do you have \
                     \ that is possibly bigger than 2^64 bits?"
-            else message Vx.++ paddingK Vx.++ paddingL
+            else -} message Vx.++ paddingK Vx.++ paddingL
 
 -- author's note. 2^64 bits is about 2 and a quarter exabytes. Who has a single thing
 -- of that size? Facebook?
@@ -396,10 +396,12 @@ padMessage1024 message =
 
 -- Good luck finding out the type constraints for THIS ONE.
 
--- Is this actually the good solution?
+-- This works. Integral shenanigans, but it works.
 sliceAndConvert x as =
     let (ys, zs) = Vx.splitAt x as
-     in (pure $ ((Vx.map fromIntegral) . cloneToWords) ys) ++ (sliceAndConvert x zs)
+     in if Vx.null ys 
+        then [Vx.empty]
+        else (pure $ ((Vx.map fromIntegral) . cloneToWords) ys) ++ (sliceAndConvert x zs)
 
 data WordSize = ThirtyTwo | SixtyFour deriving (Eq)
 
@@ -422,7 +424,7 @@ sliceAndConvert' bitvec wordsize =
     -- Make sublists of size 4 or 8.
     coalg xs =
         let (ys, zs) = Vx.splitAt (if wordsize == ThirtyTwo then 4 else 8) xs
-         in (pure ys) ++ (coalg zs)
+         in if Vx.null ys || Vx.null zs then [Vx.empty] else (pure ys) ++ (coalg zs)
     -- Combine each sublist::(Vector Word8) into a one-item Vector Word32, then concat
     alg xss = Vx.concat $ fmap ((sublistToWord wordsize) . (Vx.map fromIntegral)) xss
     sublistToWord = \case
@@ -452,7 +454,7 @@ sliceAndConvert' bitvec wordsize =
 splitAts :: (Vx.Unbox a) => Int -> Vector a -> [Vector a]
 splitAts x as =
     let (ys, zs) = Vx.splitAt x as
-     in (pure ys) ++ (splitAts x zs)
+     in if Vx.null as then [Vx.empty] else (pure ys) ++ (splitAts x zs)
 
 -- Makes a list of 512-bit message blocks. Sixteen 32-bit words are in each vector.
 parse512 :: Vector Bit -> [Vector Word32]
