@@ -21,7 +21,6 @@ module Sylvinite.Hash (
 
 import Data.Bit as Bit
 import Data.Bits
-import Data.Functor.Foldable
 import Data.Functor.Identity
 import qualified Data.Vector as Vc
 import qualified Data.Vector.Unboxed as Vx
@@ -349,23 +348,20 @@ h0_sha512256 =
 padMessage512 :: Vector Bit -> Vector Bit
 padMessage512 message =
     let messageAppend1 = message `Vx.snoc` (Bit True)
-        messageLength = countBits message
-        messageLength' = countBits messageAppend1
+        messageLength = Vx.length message
+        messageLength' = Vx.length messageAppend1
         paddingK = Vx.replicate ((448 - messageLength') `mod` 512) (Bit False)
         messageLengthBitVector = castFromWords $ Vx.singleton (fromIntegral messageLength)
-        paddingL =
-            (Vx.replicate (64 - countBits messageLengthBitVector) (Bit False))
+        paddingL = Vx.reverse $
+            (Vx.replicate (64 - Vx.length messageLengthBitVector) (Bit False))
                 Vx.++ messageLengthBitVector
-     in {- if messageLength >= (2 ^ (64 :: Int)) -- hate you, ^
-            then
-                error
-                    "Message is too large. What do you have \
-                    \ that is possibly bigger than 2^64 bits?"
-            else -} message Vx.++ paddingK Vx.++ paddingL
+     in messageAppend1 Vx.++ paddingK Vx.++ paddingL
 
 -- author's note. 2^64 bits is about 2 and a quarter exabytes. Who has a single thing
 -- of that size? Facebook?
--- author's note. soon i shall deduplicate this
+-- author's note. soon i shall deduplicate this.
+-- author's note. why do i keep having these giant let bindings? maybe i should
+-- use Cont or Identity monad or something for readability. or maybe arrows.
 
 -- Pad message for SHA-384, SHA-512, SHA-512/224, SHA-512/256
 
@@ -388,68 +384,18 @@ padMessage1024 message =
 
 -- Parsing message for SHA-1, SHA-224, SHA-256
 
--- This function snaps apart a bit vector into a vector of words of a certain size of bits.
--- sliceAndConvert 32 as takes a Vector Bit and turns it into a Vector Word32.
--- This function is so very unsafe, it doesn't check at all if you've given it enough bits.
--- There also isn't anything constraining your return type besides `Integral`.
--- If you slice things into 128 bits and turns things into Word64's, THAT IS ON YOU.
-
--- Good luck finding out the type constraints for THIS ONE.
-
--- This works. Integral shenanigans, but it works.
-sliceAndConvert x as =
-    let (ys, zs) = Vx.splitAt x as
-     in if Vx.null ys 
-        then [Vx.empty]
-        else (pure $ ((Vx.map fromIntegral) . cloneToWords) ys) ++ (sliceAndConvert x zs)
-
 data WordSize = ThirtyTwo | SixtyFour deriving (Eq)
 
-{-
--- Why does this not typecheck?
-sliceAndConvert'':: Vector Bit -> WordSize -> Vector Word
-sliceAndConvert'' bitvec wordsize = hylo alg coalg bitvec
-  where
-    coalg xs =
-        let (ys, zs) = Vx.splitAt (if wordsize == ThirtyTwo then 32 else 64) xs
-         in (pure ys) ++ (coalg zs)
-    alg xss = Vx.map fromIntegral . Vx.concat $ fmap cloneToWords xss
--}
+-- this is so bad. its actually correct though
+sliceByWordSize :: (Vx.Unbox a, Num a) => Vector Bit -> WordSize -> [Vector a]
+sliceByWordSize bitvec = \case
+  ThirtyTwo -> (init . splitAts 16 . Vx.concat . concat) $ fmap
+    (fmap ((Vx.map fromIntegral) . cloneToWords . Vx.reverse) . init . splitAts 32)
+    (init $ splitAts 512 bitvec)
+  SixtyFour -> (init . splitAts 32 . Vx.concat . concat) $ fmap 
+    (fmap ((Vx.map fromIntegral) . cloneToWords . Vx.reverse) . init . splitAts 64) 
+    (init $ splitAts 1024 bitvec)
 
--- Why does this typecheck?
-sliceAndConvert' :: (Vx.Unbox a, Bits a, Integral a) => Vector Bit -> WordSize -> Vector a
-sliceAndConvert' bitvec wordsize =
-    hylo alg coalg $ maybe (error "Not bit-aligned.") id (castToWords8 bitvec)
-  where
-    -- Make sublists of size 4 or 8.
-    coalg xs =
-        let (ys, zs) = Vx.splitAt (if wordsize == ThirtyTwo then 4 else 8) xs
-         in if Vx.null ys || Vx.null zs then [Vx.empty] else (pure ys) ++ (coalg zs)
-    -- Combine each sublist::(Vector Word8) into a one-item Vector Word32, then concat
-    alg xss = Vx.concat $ fmap ((sublistToWord wordsize) . (Vx.map fromIntegral)) xss
-    sublistToWord = \case
-        ThirtyTwo -> sublistToWord32Singleton
-        SixtyFour -> sublistToWord64Singleton
-    sublistToWord32Singleton xs =
-        let (a, b, c, d) =
-                ( shift 0 $ xs Vx.! 0
-                , shift 8 $ xs Vx.! 1
-                , shift 16 $ xs Vx.! 2
-                , shift 24 $ xs Vx.! 3
-                )
-         in Vx.singleton $ a .|. b .|. c .|. d
-    sublistToWord64Singleton xs =
-        let (a, b, c, d, e, f, g, h) =
-                ( shift 0 $ xs Vx.! 0
-                , shift 8 $ xs Vx.! 1
-                , shift 16 $ xs Vx.! 2
-                , shift 24 $ xs Vx.! 3
-                , shift 32 $ xs Vx.! 4
-                , shift 40 $ xs Vx.! 5
-                , shift 48 $ xs Vx.! 6
-                , shift 56 $ xs Vx.! 7
-                )
-         in Vx.singleton $ a .|. b .|. c .|. d .|. e .|. f .|. g .|. h
 
 splitAts :: (Vx.Unbox a) => Int -> Vector a -> [Vector a]
 splitAts x as =
@@ -458,12 +404,12 @@ splitAts x as =
 
 -- Makes a list of 512-bit message blocks. Sixteen 32-bit words are in each vector.
 parse512 :: Vector Bit -> [Vector Word32]
-parse512 message = (splitAts 16) . Vx.concat $ (sliceAndConvert 32 message)
+parse512 message = sliceByWordSize message ThirtyTwo
 
 -- Parsing message for SHA-384, SHA-512, SHA-512/224, SHA-512/256
 
-parse1024 :: Vector Bit -> Vector Word64
-parse1024 message = Vx.concat $ sliceAndConvert 64 message
+parse1024 :: Vector Bit -> [Vector Word64]
+parse1024 message = sliceByWordSize message SixtyFour
 
 -- SHA-1 hashing algorithm. Message must be of length l bits, where
 -- 0 <= l <= 2^64.
