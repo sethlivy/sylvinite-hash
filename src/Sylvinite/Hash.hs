@@ -400,9 +400,7 @@ padMessage1024 message =
 data WordSize = ThirtyTwo | SixtyFour deriving (Eq)
 
 parse :: (Vx.Unbox a, Num a) => Vector Bit -> WordSize -> Vc.Vector (Vector a)
-parse bitvec wordsize = case wordsize of
-  ThirtyTwo -> smallChunks (largeChunks bitvec wordsize) wordsize
-  SixtyFour -> undefined
+parse bitvec wordsize = smallChunks (largeChunks bitvec wordsize) wordsize
 
 largeChunks :: Vector Bit -> WordSize -> Vc.Vector (Vector Bit)
 largeChunks bitvec = \case
@@ -415,10 +413,12 @@ Should be easy, Vector Vector Bool already has one.
 -}
 
 
+-- Should this be hylo? It's an unfold followed by a fold, so it is.
+-- It'd just look weird.
 smallChunks :: (Num a, Vx.Unbox a) => Vc.Vector (Vector Bit) -> WordSize -> Vc.Vector (Vector a)
 smallChunks bitvec = \case
-  ThirtyTwo -> Vc.concatMap (splitAtsVecWord 32) bitvec
-  SixtyFour -> Vc.concatMap (splitAtsVecWord 64) bitvec
+  ThirtyTwo -> Vc.map (Vc.foldr1 (Vx.++) . splitAtsVecWord 32) bitvec
+  SixtyFour -> Vc.map (Vc.foldr1 (Vx.++) . splitAtsVecWord 64) bitvec
 
 
 splitAtsVec :: Int -> Vector Bit -> Vc.Vector (Vector Bit)
@@ -436,13 +436,13 @@ splitAtsVecWord x as = Vc.unfoldr
   ) as
 
 -- Makes a list of 512-bit message blocks. Sixteen 32-bit words are in each vector.
-parse512 :: Vector Bit -> Vector (Vector Word32)
-parse512 message = Vx.convert $ parse message ThirtyTwo
+parse512 :: Vector Bit -> Vc.Vector (Vector Word32)
+parse512 message = parse message ThirtyTwo
 
 -- Parsing message for SHA-384, SHA-512, SHA-512/224, SHA-512/256
 
-parse1024 :: Vector Bit -> Vector (Vector Word64)
-parse1024 message = Vx.convert $ parse message SixtyFour
+parse1024 :: Vector Bit -> Vc.Vector (Vector Word64)
+parse1024 message = parse message SixtyFour
 
 -- SHA-1 hashing algorithm. Message must be of length l bits, where
 -- 0 <= l <= 2^64.
