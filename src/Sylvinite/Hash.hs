@@ -1,8 +1,15 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+-- the follorwing are for prim deriving
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 
 module Sylvinite.Hash (
     sha1,
@@ -19,11 +26,17 @@ module Sylvinite.Hash (
     -}
 ) where
 
+import Control.Applicative
+import Data.Bifunctor
 import Data.Bit as Bit
 import Data.Bits
 import Data.Functor.Identity
 import qualified Data.Vector as Vc
+import qualified Data.Vector.Storable as Vs
 import qualified Data.Vector.Unboxed as Vx
+import qualified Data.Vector.Generic as Vg
+import qualified Data.Vector.Generic.Mutable as Vm
+import qualified Data.Vector.Primitive as Vp
 import Data.Word
 
 {-
@@ -386,30 +399,50 @@ padMessage1024 message =
 
 data WordSize = ThirtyTwo | SixtyFour deriving (Eq)
 
--- this is so bad. its actually correct though
-sliceByWordSize :: (Vx.Unbox a, Num a) => Vector Bit -> WordSize -> [Vector a]
-sliceByWordSize bitvec = \case
-  ThirtyTwo -> (init . splitAts 16 . Vx.concat . concat) $ fmap
-    (fmap ((Vx.map fromIntegral) . cloneToWords . Vx.reverse) . init . splitAts 32)
-    (init $ splitAts 512 bitvec)
-  SixtyFour -> (init . splitAts 32 . Vx.concat . concat) $ fmap 
-    (fmap ((Vx.map fromIntegral) . cloneToWords . Vx.reverse) . init . splitAts 64) 
-    (init $ splitAts 1024 bitvec)
+parse :: (Vx.Unbox a, Num a) => Vector Bit -> WordSize -> Vc.Vector (Vector a)
+parse bitvec wordsize = case wordsize of
+  ThirtyTwo -> smallChunks (largeChunks bitvec wordsize) wordsize
+  SixtyFour -> undefined
+
+largeChunks :: Vector Bit -> WordSize -> Vc.Vector (Vector Bit)
+largeChunks bitvec = \case
+  ThirtyTwo -> splitAtsVec 512 bitvec
+  SixtyFour -> splitAtsVec 1024 bitvec
+
+{-
+TODO: Make an Unbox instance for Vector Vector Bit. 
+Should be easy, Vector Vector Bool already has one.
+-}
 
 
-splitAts :: (Vx.Unbox a) => Int -> Vector a -> [Vector a]
-splitAts x as =
-    let (ys, zs) = Vx.splitAt x as
-     in if Vx.null as then [Vx.empty] else (pure ys) ++ (splitAts x zs)
+smallChunks :: (Num a, Vx.Unbox a) => Vc.Vector (Vector Bit) -> WordSize -> Vc.Vector (Vector a)
+smallChunks bitvec = \case
+  ThirtyTwo -> Vc.concatMap (splitAtsVecWord 32) bitvec
+  SixtyFour -> Vc.concatMap (splitAtsVecWord 64) bitvec
+
+
+splitAtsVec :: Int -> Vector Bit -> Vc.Vector (Vector Bit)
+splitAtsVec x as = Vc.unfoldr 
+  (\as -> if Vx.null as 
+          then Nothing 
+          else Just $ Vx.splitAt x as
+  ) as
+
+splitAtsVecWord :: (Num a, Vx.Unbox a) => Int -> Vector Bit -> Vc.Vector (Vector a)
+splitAtsVecWord x as = Vc.unfoldr
+  (\as -> if Vx.null as 
+          then Nothing
+          else Just $ first ((Vx.map fromIntegral) . cloneToWords . Vx.reverse) (Vx.splitAt x as)
+  ) as
 
 -- Makes a list of 512-bit message blocks. Sixteen 32-bit words are in each vector.
-parse512 :: Vector Bit -> [Vector Word32]
-parse512 message = sliceByWordSize message ThirtyTwo
+parse512 :: Vector Bit -> Vector (Vector Word32)
+parse512 message = Vx.convert $ parse message ThirtyTwo
 
 -- Parsing message for SHA-384, SHA-512, SHA-512/224, SHA-512/256
 
-parse1024 :: Vector Bit -> [Vector Word64]
-parse1024 message = sliceByWordSize message SixtyFour
+parse1024 :: Vector Bit -> Vector (Vector Word64)
+parse1024 message = Vx.convert $ parse message SixtyFour
 
 -- SHA-1 hashing algorithm. Message must be of length l bits, where
 -- 0 <= l <= 2^64.
@@ -430,7 +463,7 @@ sha1 message =
         prepare (_, a, b, c, d, e) =
             castFromWords . (Vx.map fromIntegral) . Vx.fromList $ [a, b, c, d, e]
      in prepare . Vx.last $
-            Vx.unfoldrExactN messageLength (\a -> coalg parsedMessage a) h0_sha1
+            Vx.unfoldrExactN messageLength (\a -> coalg undefined a) h0_sha1
 
 messageSchedule :: Int -> [Vector Word32] -> Vector Word32
 messageSchedule index parsed = Vx.fromList $ (wt $ parsed !! index) <$> [0 .. 79]
