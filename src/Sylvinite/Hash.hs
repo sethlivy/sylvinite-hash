@@ -11,6 +11,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 
+-- As described in FIPS PUB 180-4
 module Sylvinite.Hash (
     sha1,
     {-  , sha224
@@ -27,6 +28,7 @@ module Sylvinite.Hash (
 ) where
 
 import Control.Applicative
+import qualified Control.Foldl as Fold
 import Data.Bifunctor
 import Data.Bit as Bit
 import Data.Bits
@@ -279,6 +281,7 @@ sha512Constants =
 
 -- Initial hash values
 
+h0_sha1 :: w ~ Word32 => (w,w,w,w,w,w)
 h0_sha1 =
     ( 0
     , 0x67452301
@@ -453,43 +456,18 @@ wt msg t -- message schedule gen function. spits out words, not bit vectors
     | (16 <= t) && (t <= 79) -- this could be cleaner
         =
         rotl 1 $ foldl1 xor [wt msg (t - 3), wt msg (t - 8), wt msg (t - 14), wt msg (t - 16)]
-    | otherwise = error "Went past 79 in message scheduling function."
+    | otherwise = error "Went past 79 in message scheduling function. How could this happen?"
 
-sha1 :: Vector Bit -> Vector Bit
-sha1 message =
-    let initHash = h0_sha1
-        parsedMessage = parse512 . padMessage512 $ message
-        messageLength = length parsedMessage
-        prepare (_, a, b, c, d, e) =
-            castFromWords . (Vx.map fromIntegral) . Vx.fromList $ [a, b, c, d, e]
-     in prepare . Vx.last $
-            Vx.unfoldrExactN messageLength (\a -> coalg undefined a) h0_sha1
-
-messageSchedule :: Int -> [Vector Word32] -> Vector Word32
-messageSchedule index parsed = Vx.fromList $ (wt $ parsed !! index) <$> [0 .. 79]
-
-step3 :: w ~ Word32 => Vector w -> (w, w, w, w, w, w, Int) -> (w, w, w, w, w, w, Int)
-step3 msg startval =
-    Vc.last $
-        Vc.unfoldrExactN
-            80
-            ( \old@(t, e, d, c, b, a, idx) ->
-                (,)
-                    old -- this is so ugly.
-                    ( (rotl 5 a) + (sha1Function b c d idx) + e + (sha1Constants idx) + (wt msg idx)
-                    , d
-                    , c
-                    , rotl 30 b
-                    , a
-                    , t
-                    , idx + 1
-                    )
-            )
-            startval
-
-coalg :: (w ~ Word32, xx ~ (Int, w, w, w, w, w)) => [Vector w] -> xx -> (xx, xx) -- fuck you
-coalg msg old@(idx, a, b, c, d, e) = (,) old $ runIdentity $ do
-    let w = messageSchedule idx msg
-        prepare (_, p, o, n, m, l, _) = (l, m, n, o, p)
-        (a', b', c', d', e') = prepare $ step3 w (0, e, d, c, b, a, idx)
-    return (idx + 1, a + a', b + b', c + c', d + d', e + e')
+-- Can I compose these folds with Applicative?
+sha1 :: Vector Bit -> Vector Word32
+sha1 bitvec = Fold.fold (sha1_folder :: Fold.Fold (Vector Word32) (Vector Word32)) parsed
+  where parsed = parse512 . padMessage512 $ bitvec :: Vc.Vector (Vector Word32)
+        k = sha1Constants
+        tcalc a b c d e w idx = (rotl 5 a) + (sha1Function b c d idx) + e + (k idx) + w
+        sha1_folder = Fold.Fold step begin done
+        step temp messageBlock = 
+          let schedule = fmap (wt messageBlock) [0..79]
+           in Fold.fold (Fold.Fold step3 temp id) schedule
+        begin = (0,h0_sha1)
+        done (_,(_,a,b,c,d,e)) = Vx.fromList $ [a,b,c,d,e]
+        step3 (idx,(t,a,b,c,d,e)) w = (idx+1,(tcalc a b c d e w idx,t,a, rotl 30 b, c, d))
