@@ -1,15 +1,5 @@
-{-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE ScopedTypeVariables #-}
--- the follorwing are for prim deriving
 {-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE DerivingVia #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 
 -- As described in FIPS PUB 180-4
 module Sylvinite.Hash (
@@ -27,22 +17,17 @@ module Sylvinite.Hash (
     -}
 ) where
 
-import Control.Applicative
 import qualified Control.Foldl as Fold
+-- import qualified Data.ByteString as BS
+-- import Data.ByteString.Base16
 import Data.Bifunctor
 import Data.Bit as Bit
 import Data.Bits
-import Data.Functor.Identity
 import qualified Data.Vector as Vc
-import qualified Data.Vector.Storable as Vs
 import qualified Data.Vector.Unboxed as Vx
-import qualified Data.Vector.Generic as Vg
-import qualified Data.Vector.Generic.Mutable as Vm
-import qualified Data.Vector.Primitive as Vp
 import Data.Word
 
 {-
-sha1 = undefined
 sha224 = undefined
 sha256 = undefined
 sha384 = undefined
@@ -459,6 +444,7 @@ wt msg t -- message schedule gen function. spits out words, not bit vectors
     | otherwise = error "Went past 79 in message scheduling function. How could this happen?"
 
 -- Can I compose these folds with Applicative?
+-- Can I use type families so that this works with any textlike input?
 sha1 :: Vector Bit -> Vector Word32
 sha1 bitvec = Fold.fold (sha1_folder :: Fold.Fold (Vector Word32) (Vector Word32)) parsed
   where parsed = parse512 . padMessage512 $ bitvec :: Vc.Vector (Vector Word32)
@@ -467,7 +453,8 @@ sha1 bitvec = Fold.fold (sha1_folder :: Fold.Fold (Vector Word32) (Vector Word32
         sha1_folder = Fold.Fold step begin done
         step temp messageBlock = 
           let schedule = fmap (wt messageBlock) [0..79]
-           in Fold.fold (Fold.Fold step3 temp id) schedule
+           in Fold.fold (Fold.Fold step3 temp (second . step4 $ snd temp)) schedule
         begin = (0,h0_sha1)
         done (_,(_,a,b,c,d,e)) = Vx.fromList $ [a,b,c,d,e]
         step3 (idx,(t,a,b,c,d,e)) w = (idx+1,(tcalc a b c d e w idx,t,a, rotl 30 b, c, d))
+        step4 (_,a,b,c,d,e) (_,a',b',c',d',e') = (0,a+a',b+b',c+c',d+d',e+e')
