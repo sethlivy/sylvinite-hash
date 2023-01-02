@@ -18,7 +18,7 @@ module Sylvinite.Hash (
 ) where
 
 import qualified Control.Foldl as Fold
--- import qualified Data.ByteString as BS
+import qualified Data.ByteString as BS
 -- import Data.ByteString.Base16
 import Data.Bifunctor
 import Data.Bit as Bit
@@ -39,6 +39,9 @@ sha3_256 = undefined
 sha3_384 = undefined
 sha3_512 = undefined
 -}
+
+sha1 :: BS.ByteString -> BS.ByteString
+sha1 bs = undefined
 
 -- | Right shift operation, x is a w-bit word and 0 <= n < w.
 shr :: Bits a => Int -> a -> a
@@ -445,8 +448,8 @@ wt msg t -- message schedule gen function. spits out words, not bit vectors
 
 -- Can I compose these folds with Applicative?
 -- Can I use type families so that this works with any textlike input?
-sha1 :: Vector Bit -> Vector Word32
-sha1 bitvec = Fold.fold (sha1_folder :: Fold.Fold (Vector Word32) (Vector Word32)) parsed
+sha1Internal :: Vector Bit -> Vector Word32
+sha1Internal bitvec = Fold.fold (sha1_folder :: Fold.Fold (Vector Word32) (Vector Word32)) parsed
   where parsed = parse512 . padMessage512 $ bitvec :: Vc.Vector (Vector Word32)
         k = sha1Constants
         tcalc a b c d e w idx = (rotl 5 a) + (sha1Function b c d idx) + e + (k idx) + w
