@@ -19,7 +19,9 @@ module Sylvinite.Hash (
 
 import qualified Control.Foldl as Fold
 import qualified Data.ByteString as BS
--- import Data.ByteString.Base16
+import qualified Data.ByteString.Builder as BSB
+import qualified Data.ByteString.Lazy as BSL
+import qualified Data.ByteString.Base16 as BS16
 import Data.Bifunctor
 import Data.Bit as Bit
 import Data.Bits
@@ -41,7 +43,12 @@ sha3_512 = undefined
 -}
 
 sha1 :: BS.ByteString -> BS.ByteString
-sha1 bs = undefined
+sha1 bs = 
+  let bitvec = cloneFromByteString bs
+      wordvec = sha1Internal bitvec
+   in BS16.encodeBase16' . BS.concat $ 
+        fmap (BSL.toStrict . BSB.toLazyByteString . BSB.word32BE) (Vx.toList wordvec) 
+
 
 -- | Right shift operation, x is a w-bit word and 0 <= n < w.
 shr :: Bits a => Int -> a -> a
